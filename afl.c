@@ -5,6 +5,10 @@
 #include <string.h>
 #include <limits.h>
 #include <stdint.h>
+#ifdef __APPLE__
+#include <mach-o/getsect.h>
+#include <mach-o/ldsyms.h>
+#endif
 
 /* Main entry point. */
 
@@ -19,12 +23,13 @@ void zig_fuzz_init();
 void zig_fuzz_test(unsigned char *, ssize_t);
 
 
-// Linker-provided symbols marking the boundaries of the __sancov_guards section.
-// These must be declared extern so the linker provides the actual section boundaries
-// from the instrumented code, rather than creating new variables that shadow them.
+void __sanitizer_cov_trace_pc_guard_init(uint32_t*, uint32_t*);
+
+#ifndef __APPLE__
+// ELF (Linux): linker auto-generates __start_*/__stop_* section boundary symbols.
 extern uint32_t __start___sancov_guards;
 extern uint32_t __stop___sancov_guards;
-void __sanitizer_cov_trace_pc_guard_init(uint32_t*, uint32_t*);
+#endif
 
 
 
@@ -43,7 +48,17 @@ unsigned char __afl_fuzz_alt[1048576];
 unsigned char *__afl_fuzz_alt_ptr = __afl_fuzz_alt;
 
 int main(int argc, char **argv) {
+#ifdef __APPLE__
+    // On macOS (Mach-O), use getsectiondata to find the __sancov_guards section
+    // at runtime. The guards land in __DATA,__sancov_guards.
+    unsigned long sancov_size = 0;
+    uint32_t *sancov_start = (uint32_t *)getsectiondata(
+        &_mh_execute_header, "__DATA", "__sancov_guards", &sancov_size);
+    uint32_t *sancov_stop = sancov_start + sancov_size / sizeof(uint32_t);
+    __sanitizer_cov_trace_pc_guard_init(sancov_start, sancov_stop);
+#else
     __sanitizer_cov_trace_pc_guard_init(&__start___sancov_guards, &__stop___sancov_guards);
+#endif
   
   // __AFL_INIT();
       static volatile const char *_A __attribute__((used,unused)); 
